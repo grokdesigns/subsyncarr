@@ -1,6 +1,6 @@
 import { buildOutputPath, execPromise, ProcessingResult } from './helpers';
 import { existsSync } from 'fs';
-import { getSuffixConfig } from './config';
+import { getSuffixConfig, getAlassExtraArgs } from './config';
 
 export async function generateAlassSubtitles(srtPath: string, videoPath: string): Promise<ProcessingResult> {
   const outputPath = buildOutputPath(srtPath, getSuffixConfig().alass);
@@ -15,7 +15,8 @@ export async function generateAlassSubtitles(srtPath: string, videoPath: string)
   }
 
   try {
-    const command = `alass "${videoPath}" "${srtPath}" "${outputPath}"`;
+    const extraArgs = getAlassExtraArgs();
+    const command = `alass "${videoPath}" "${srtPath}" "${outputPath}"${extraArgs ? ` ${extraArgs}` : ''}`;
     console.log(`${new Date().toLocaleString()} Processing: ${command}`);
     const { stdout, stderr } = await execPromise(command);
     return {

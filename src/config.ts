@@ -17,6 +17,16 @@ export function getSuffixConfig(): SuffixConfig {
   };
 }
 
+// NEW: raw passthrough args appended to every `alass` invocation.
+// e.g. ALASS_EXTRA_ARGS="--disable-fps-guessing" to stop alass from
+// guessing (and sometimes mis-guessing) a framerate conversion, or
+// "--no-split" to force a single constant-offset sync, or
+// "--split-penalty 15" to make it much more conservative about
+// introducing multi-segment shifts.
+export function getAlassExtraArgs(): string {
+  return process.env.ALASS_EXTRA_ARGS || '';
+}
+
 export interface RetentionConfig {
   keepRunsDays: number; // Keep complete runs for N days
   trimLogsDays: number; // Trim logs after N days
