@@ -106,3 +106,52 @@ describe('ProcessingEngine - processed fingerprint tracking', () => {
     expect(mockStateManager.markProcessed).not.toHaveBeenCalled();
   });
 });
+
+describe('ProcessingEngine - concurrency', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.INCLUDE_ENGINES = 'alass';
+    mockedComputeVideoFingerprint.mockResolvedValue('hash');
+    mockedFindMatchingVideoFile.mockImplementation((srtPath: string) => srtPath.replace('.srt', '.mkv'));
+  });
+
+  it('keeps a new file flowing into a freed worker slot instead of waiting for the whole batch to drain', async () => {
+    process.env.MAX_CONCURRENT_SYNC_TASKS = '2';
+    const mockStateManager = {
+      getProcessedRecord: jest.fn().mockReturnValue(null),
+      markProcessed: jest.fn(),
+      shouldSkipEngine: jest.fn().mockReturnValue(false),
+    };
+    // maxConcurrent is read in the constructor, so it must be created after the env var is set.
+    const pooledEngine = new ProcessingEngine();
+    pooledEngine.stateManager = mockStateManager as unknown as StateManager;
+
+    const files = ['/media/a.srt', '/media/b.srt', '/media/c.srt'];
+    mockedFindAllSrtFiles.mockResolvedValue({ files, skippedCount: 0 });
+
+    let resolveA!: () => void;
+    const aPending = new Promise<void>((resolve) => {
+      resolveA = resolve;
+    });
+
+    mockedGenerateAlassSubtitles.mockImplementation(async (srtPath: string) => {
+      if (srtPath === '/media/a.srt') {
+        await aPending;
+      }
+      return { success: true, message: 'ok' };
+    });
+
+    const runPromise = pooledEngine.processRun({ includePaths: ['/media'], excludePaths: [] });
+
+    // Drain the microtask queue: worker 1 should be stuck awaiting 'a', worker 2 should
+    // have already finished 'b' and picked up 'c' — proving it didn't wait on worker 1.
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const calledPaths = mockedGenerateAlassSubtitles.mock.calls.map(([srtPath]) => srtPath);
+    expect(calledPaths).toEqual(expect.arrayContaining(['/media/a.srt', '/media/b.srt', '/media/c.srt']));
+
+    resolveA();
+    await runPromise;
+  });
+});

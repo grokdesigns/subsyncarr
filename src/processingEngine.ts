@@ -55,17 +55,22 @@ export class ProcessingEngine extends EventEmitter {
 
     this.emit('run:files_found', srtFiles, skippedCount);
 
-    // Process in batches
     this.log(`[${new Date().toISOString()}] Processing with concurrency: ${this.maxConcurrent}`);
     this.log(`[${new Date().toISOString()}] Enabled engines: ${this.enabledEngines.join(', ')}`);
 
-    for (let i = 0; i < srtFiles.length; i += this.maxConcurrent) {
-      const batch = srtFiles.slice(i, i + this.maxConcurrent);
-      this.log(
-        `[${new Date().toISOString()}] Processing batch ${Math.floor(i / this.maxConcurrent) + 1}/${Math.ceil(srtFiles.length / this.maxConcurrent)} (${batch.length} files)`,
-      );
-      await Promise.all(batch.map((file) => this.processFile(file)));
-    }
+    // Keep up to maxConcurrent files in flight at all times: each worker pulls the next
+    // file off the shared queue as soon as it finishes, instead of waiting for an entire
+    // fixed-size batch to drain (which stalls idle slots behind the slowest file in a batch).
+    let nextIndex = 0;
+    const worker = async (): Promise<void> => {
+      while (nextIndex < srtFiles.length) {
+        const file = srtFiles[nextIndex++];
+        await this.processFile(file);
+      }
+    };
+
+    const workerCount = Math.min(this.maxConcurrent, srtFiles.length);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
     this.log(`[${new Date().toISOString()}] All files processed`);
   }
