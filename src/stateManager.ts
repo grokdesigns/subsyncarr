@@ -1,5 +1,5 @@
 import EventEmitter from 'events';
-import { SubsyncarrPlusDatabase, Run, FileResult } from './database';
+import { SubsyncarrPlusDatabase, Run, FileResult, ProcessedFileRecord } from './database';
 import { randomUUID } from 'crypto';
 import { LogFileManager } from './logFileManager';
 import * as path from 'path';
@@ -36,7 +36,11 @@ export class StateManager extends EventEmitter {
   }
 
   // Run management
-  startRun(totalFiles: number, enabledEngines: string[] = ['ffsubsync', 'autosubsync', 'alass'], alreadySyncedCount: number = 0): string {
+  startRun(
+    totalFiles: number,
+    enabledEngines: string[] = ['ffsubsync', 'autosubsync', 'alass'],
+    alreadySyncedCount: number = 0,
+  ): string {
     const runId = randomUUID();
     this.db.createRun(runId, totalFiles);
 
@@ -107,7 +111,13 @@ export class StateManager extends EventEmitter {
     this.db.createFileResult(runId, filePath, videoPath);
   }
 
-  updateFileStatus(runId: string, filePath: string, status: FileResult['status'], currentEngine?: string | null, videoPath?: string | null): void {
+  updateFileStatus(
+    runId: string,
+    filePath: string,
+    status: FileResult['status'],
+    currentEngine?: string | null,
+    videoPath?: string | null,
+  ): void {
     const updates: Partial<FileResult> = { status };
     if (currentEngine !== undefined) {
       updates.current_engine = currentEngine;
@@ -226,6 +236,15 @@ export class StateManager extends EventEmitter {
 
   getFailureStats() {
     return this.db.getFailureTrackingStats();
+  }
+
+  // Processed file tracking (survives external renames of the output file)
+  getProcessedRecord(filePath: string, engine: string): ProcessedFileRecord | null {
+    return this.db.getProcessedRecord(filePath, engine);
+  }
+
+  markProcessed(filePath: string, engine: string, videoPath: string | null, videoFingerprint: string): void {
+    this.db.recordProcessed(filePath, engine, videoPath, videoFingerprint);
   }
 
   close() {

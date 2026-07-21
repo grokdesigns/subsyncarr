@@ -6,6 +6,7 @@ import { generateFfsubsyncSubtitles } from './generateFfsubsyncSubtitles';
 import { generateAutosubsyncSubtitles } from './generateAutosubsyncSubtitles';
 import { generateAlassSubtitles } from './generateAlassSubtitles';
 import { StateManager } from './stateManager';
+import { computeVideoFingerprint } from './videoFingerprint';
 
 export class ProcessingEngine extends EventEmitter {
   private cancelledFiles: Set<string> = new Set();
@@ -48,7 +49,9 @@ export class ProcessingEngine extends EventEmitter {
     this.log(`[${new Date().toISOString()}] Scan paths: ${JSON.stringify(scanConfig.includePaths)}`);
 
     const { files: srtFiles, skippedCount } = await findAllSrtFiles(scanConfig);
-    this.log(`[${new Date().toISOString()}] Found ${srtFiles.length} subtitle files to process (${skippedCount} already synced)`);
+    this.log(
+      `[${new Date().toISOString()}] Found ${srtFiles.length} subtitle files to process (${skippedCount} already synced)`,
+    );
 
     this.emit('run:files_found', srtFiles, skippedCount);
 
@@ -93,12 +96,49 @@ export class ProcessingEngine extends EventEmitter {
     // Process with each enabled engine
     let anyEngineSucceeded = false;
     let allEnginesSkipped = true;
+
+    // Lazily fingerprint the video (size + head/tail sample) only if we need to compare
+    // against a prior processed record — avoids reading every video on every scan.
+    let videoFingerprint: string | null = null;
+    const getVideoFingerprint = async (): Promise<string> => {
+      if (videoFingerprint === null) {
+        videoFingerprint = await computeVideoFingerprint(videoPath);
+      }
+      return videoFingerprint;
+    };
+
     for (const engine of this.enabledEngines) {
       // Check cancellation before each engine
       if (this.cancelledFiles.has(srtPath)) {
         this.log(`[${new Date().toISOString()}] Skipped (cancelled): ${fileName}`);
         this.emit('file:skipped', { srtPath, reason: 'cancelled' });
         return;
+      }
+
+      // Check if this engine already processed this exact video (handles external
+      // tools that rename/replace the output file, e.g. a cron job promoting
+      // movie.alass.srt to movie.srt), unless the video itself has since changed.
+      const processedRecord = this.stateManager?.getProcessedRecord(srtPath, engine);
+      if (processedRecord) {
+        const fingerprint = await getVideoFingerprint();
+        if (fingerprint === processedRecord.video_fingerprint) {
+          this.log(
+            `[${new Date().toISOString()}] ⊘ Skipping ${engine} (already processed, video unchanged): ${fileName}`,
+          );
+          this.emit('file:engine_completed', {
+            srtPath,
+            engine,
+            result: {
+              success: true,
+              duration: 0,
+              message: 'Already processed (video unchanged)',
+              skipped: true,
+            },
+          });
+          continue; // Skip to next engine (allEnginesSkipped remains true)
+        }
+        // Fingerprint mismatch — video changed (e.g. Bazarr re-downloaded after an
+        // upgrade), so fall through and reprocess.
       }
 
       // Check if engine should be skipped due to consecutive failures
@@ -139,6 +179,12 @@ export class ProcessingEngine extends EventEmitter {
         }
 
         const duration = Date.now() - startTime;
+
+        // Record success (including the filesystem-based "already exists" skip) so
+        // this survives an external tool later renaming/replacing the output file.
+        if (result.success && this.stateManager) {
+          this.stateManager.markProcessed(srtPath, engine, videoPath, await getVideoFingerprint());
+        }
 
         // If this engine was skipped (already processed), log and continue
         if (result.skipped) {

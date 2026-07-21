@@ -28,6 +28,14 @@ export interface FileResult {
   updated_at: number;
 }
 
+export interface ProcessedFileRecord {
+  file_path: string;
+  engine: string;
+  video_path: string | null;
+  video_fingerprint: string;
+  processed_at: number;
+}
+
 export interface EngineFailureTracking {
   id: number;
   file_path: string;
@@ -104,6 +112,19 @@ export class SubsyncarrPlusDatabase {
         ON file_results(run_id);
       CREATE INDEX IF NOT EXISTS idx_file_results_status
         ON file_results(status);
+
+      CREATE TABLE IF NOT EXISTS processed_files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_path TEXT NOT NULL,
+        engine TEXT NOT NULL,
+        video_path TEXT,
+        video_fingerprint TEXT NOT NULL,
+        processed_at INTEGER NOT NULL,
+        UNIQUE(file_path, engine)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_processed_files_path
+        ON processed_files(file_path);
     `);
 
     // Migration: Add logs column if it doesn't exist
@@ -278,6 +299,30 @@ export class SubsyncarrPlusDatabase {
     `,
       )
       .all(runId) as FileResult[];
+  }
+
+  // Processed file tracking (survives external renames of the output file)
+  getProcessedRecord(filePath: string, engine: string): ProcessedFileRecord | null {
+    return (
+      (this.db
+        .prepare(`SELECT * FROM processed_files WHERE file_path = ? AND engine = ?`)
+        .get(filePath, engine) as ProcessedFileRecord) || null
+    );
+  }
+
+  recordProcessed(filePath: string, engine: string, videoPath: string | null, videoFingerprint: string): void {
+    this.db
+      .prepare(
+        `
+      INSERT INTO processed_files (file_path, engine, video_path, video_fingerprint, processed_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(file_path, engine) DO UPDATE SET
+        video_path = excluded.video_path,
+        video_fingerprint = excluded.video_fingerprint,
+        processed_at = excluded.processed_at
+    `,
+      )
+      .run(filePath, engine, videoPath, videoFingerprint, Date.now());
   }
 
   // Engine failure tracking methods
