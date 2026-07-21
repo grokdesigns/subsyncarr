@@ -22,6 +22,11 @@ COPY . .
 RUN mkdir -p /home/node/.local/bin/ && cp bin/* /home/node/.local/bin/ && chown -R node:node /home/node/.local
 RUN npm run build
 
+# Drop devDependencies (typescript, eslint, jest, babel, prettier, husky, @types/*, etc.) —
+# they're only needed to produce dist/, not to run it. better-sqlite3 stays untouched since
+# it's a regular dependency, so its native build isn't invalidated.
+RUN npm prune --omit=dev
+
 # Install Python tools as node user
 USER node
 ENV PATH="/home/node/.local/bin:$PATH"
@@ -63,10 +68,7 @@ COPY --from=builder --chown=node:node /app/public ./public
 COPY --from=builder --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/package.json ./package.json
 
-# Copy alass binary
-COPY --from=builder --chown=node:node /home/node/.local/bin/alass /home/node/.local/bin/alass
-
-# Copy Python tools from builder
+# Copy alass binary + Python tools (ffsubsync/autosubsync pipx venvs) from builder
 COPY --from=builder --chown=node:node /home/node/.local /home/node/.local
 
 # Create data directory
